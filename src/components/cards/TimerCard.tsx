@@ -1,142 +1,127 @@
-import React, { useState } from 'react';
-import { BaseCard } from './BaseCard';
-import { useTimer, TimerMode } from '../../hooks/useTimer';
-import { Play, Pause, RotateCcw } from 'lucide-react';
+import React, { useEffect } from "react";
+import { BaseCard } from "./BaseCard";
+import { useTimerStore, TIMER_PHASES } from "@/stores/timerStore";
+import { useAppStore } from "../../stores/appStore";
+import { Play, Pause, SkipForward, RotateCcw } from "lucide-react";
 
-interface TimerCardProps {
-  mode?: TimerMode;
-  title?: string;
-  onTimeUpdate?: (seconds: number) => void;
-}
+export const TimerCard: React.FC = () => {
+  const {
+    isRunning,
+    timeRemaining,
+    currentPhase,
+    totalTimeSpent,
+    setIsRunning,
+    setTimeRemaining,
+    setCurrentPhase,
+    addTimeSpent,
+  } = useTimerStore();
 
-export const TimerCard: React.FC<TimerCardProps> = ({
-  mode = 'countup',
-  title = 'Study Timer',
-  onTimeUpdate,
-}) => {
-  const timer = useTimer({ initialSeconds: 0, mode });
-  const [timerMode, setTimerMode] = useState<TimerMode>(mode);
-  const [countdownMinutes, setCountdownMinutes] = useState(5);
+  const { setCurrentTimerPhase } = useAppStore();
 
-  const handleModeChange = (newMode: TimerMode) => {
-    setTimerMode(newMode);
-    timer.reset();
+  // Timer tick effect
+  useEffect(() => {
+    if (!isRunning) return;
+
+    const interval = setInterval(() => {
+      setTimeRemaining(Math.max(0, timeRemaining - 1));
+      addTimeSpent(1);
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [isRunning, timeRemaining, setTimeRemaining, addTimeSpent]);
+
+  // Auto advance phase when timer ends
+  useEffect(() => {
+    if (timeRemaining === 0 && isRunning) {
+      setIsRunning(false);
+      if (currentPhase < 6) {
+        setCurrentPhase(currentPhase + 1);
+      }
+    }
+  }, [timeRemaining, isRunning, currentPhase, setIsRunning, setCurrentPhase]);
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
   };
 
-  React.useEffect(() => {
-    onTimeUpdate?.(Math.floor(timer.totalSeconds));
-  }, [timer.totalSeconds, onTimeUpdate]);
+  const currentPhaseData = TIMER_PHASES.find((p) => p.number === currentPhase);
+  const progressPercent = (
+    ((TIMER_PHASES[currentPhase - 1].duration - timeRemaining) /
+      TIMER_PHASES[currentPhase - 1].duration) *
+    100
+  ).toFixed(0);
 
   return (
-    <BaseCard
-      title={title}
-      subtitle={timerMode === 'countup' ? 'Count Up' : 'Count Down'}
-      icon="⏱️"
-      className="col-span-2 md:col-span-1"
-    >
-      <div className="space-y-6">
-        {/* Mode Toggle */}
-        <div className="flex gap-2">
-          <button
-            onClick={() => handleModeChange('countup')}
-            className={`flex-1 py-2 px-3 rounded-lg font-medium text-sm transition-colors ${timerMode === 'countup'
-                ? 'bg-blue-600 text-white'
-                : 'bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-white hover:bg-slate-300 dark:hover:bg-slate-600'
-              }`}
-          >
-            Count Up
-          </button>
-          <button
-            onClick={() => handleModeChange('countdown')}
-            className={`flex-1 py-2 px-3 rounded-lg font-medium text-sm transition-colors ${timerMode === 'countdown'
-                ? 'bg-blue-600 text-white'
-                : 'bg-slate-200 dark:bg-slate-700 text-slate-900 dark:text-white hover:bg-slate-300 dark:hover:bg-slate-600'
-              }`}
-          >
-            Count Down
-          </button>
-        </div>
-
-        {/* Countdown Setup */}
-        {timerMode === 'countdown' && !timer.isRunning && timer.totalSeconds === 0 && (
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
-              Minutes: {countdownMinutes}
-            </label>
-            <input
-              type="range"
-              min="1"
-              max="60"
-              value={countdownMinutes}
-              onChange={(e) => setCountdownMinutes(parseInt(e.target.value))}
-              className="w-full"
-            />
-            <button
-              onClick={() => timer.setTotalSeconds(countdownMinutes * 60)}
-              className="btn-primary w-full"
-            >
-              Set Countdown
-            </button>
-          </div>
-        )}
-
-        {/* Timer Display */}
+    <BaseCard id="timer" title="Study Timer" className="col-span-1">
+      <div className="flex flex-col items-center gap-6">
+        {/* Phase display */}
         <div className="text-center">
-          <div className="text-5xl font-bold font-mono text-blue-600 dark:text-blue-400 tracking-wider">
-            {timer.formatTime()}
-          </div>
+          <p className="text-xs text-slate-400 mb-1">Current Phase</p>
+          <p className="text-3xl font-bold text-amber-400">
+            {currentPhaseData?.label}
+          </p>
         </div>
 
-        {/* Progress Bar */}
-        {timerMode === 'countdown' && countdownMinutes > 0 && (
-          <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-2 overflow-hidden">
-            <div
-              className="bg-blue-600 h-full transition-all duration-200"
-              style={{
-                width: `${((countdownMinutes * 60 - timer.totalSeconds) / (countdownMinutes * 60)) * 100}%`,
-              }}
+        {/* Timer display */}
+        <div className="relative w-32 h-32 flex items-center justify-center">
+          <svg className="absolute w-full h-full transform -rotate-90">
+            <circle
+              cx="64"
+              cy="64"
+              r="56"
+              fill="none"
+              stroke="#334155"
+              strokeWidth="2"
             />
+            <circle
+              cx="64"
+              cy="64"
+              r="56"
+              fill="none"
+              stroke="#3b82f6"
+              strokeWidth="2"
+              strokeDasharray={`${(356 * Number(progressPercent)) / 100} 356`}
+              className="transition-all duration-500"
+            />
+          </svg>
+          <div className="text-center">
+            <p className="text-4xl font-mono font-bold text-blue-400">
+              {formatTime(timeRemaining)}
+            </p>
           </div>
-        )}
+        </div>
 
         {/* Controls */}
         <div className="flex gap-2">
           <button
-            onClick={timer.isRunning ? timer.pause : timer.start}
-            className="flex-1 btn-primary flex items-center justify-center gap-2"
+            onClick={() => setIsRunning(!isRunning)}
+            className="p-2 bg-blue-500/20 hover:bg-blue-500/30 rounded border border-blue-500/50 text-blue-400 transition-colors"
           >
-            {timer.isRunning ? (
-              <>
-                <Pause size={18} /> Pause
-              </>
-            ) : (
-              <>
-                <Play size={18} /> Start
-              </>
-            )}
+            {isRunning ? <Pause size={18} /> : <Play size={18} />}
           </button>
           <button
-            onClick={timer.reset}
-            className="btn-secondary px-4 flex items-center justify-center gap-2"
+            onClick={() => setCurrentPhase(currentPhase + 1)}
+            className="p-2 bg-slate-700/50 hover:bg-slate-700 rounded border border-slate-600/50 text-slate-300 transition-colors disabled:opacity-50"
+            disabled={currentPhase >= 6}
+          >
+            <SkipForward size={18} />
+          </button>
+          <button
+            onClick={() => {
+              setIsRunning(false);
+              setCurrentPhase(1);
+            }}
+            className="p-2 bg-slate-700/50 hover:bg-slate-700 rounded border border-slate-600/50 text-slate-300 transition-colors"
           >
             <RotateCcw size={18} />
           </button>
         </div>
 
-        {/* Stats */}
-        <div className="grid grid-cols-2 gap-3 pt-4 border-t border-slate-200 dark:border-slate-700">
-          <div className="text-center">
-            <p className="text-xs text-slate-500 dark:text-slate-400">Seconds</p>
-            <p className="text-xl font-semibold text-slate-900 dark:text-white">
-              {Math.floor(timer.totalSeconds)}
-            </p>
-          </div>
-          <div className="text-center">
-            <p className="text-xs text-slate-500 dark:text-slate-400">Status</p>
-            <p className="text-xl font-semibold text-slate-900 dark:text-white">
-              {timer.isRunning ? '🔴 Running' : '⏸️ Paused'}
-            </p>
-          </div>
+        {/* Total time spent */}
+        <div className="text-center text-xs text-slate-400">
+          <p>Total time today: {formatTime(totalTimeSpent)}</p>
         </div>
       </div>
     </BaseCard>

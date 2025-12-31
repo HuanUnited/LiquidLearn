@@ -1,8 +1,8 @@
 pub mod commands;
-pub mod db;
+pub mod migrations;
 pub mod models;
 pub mod services;
 
-pub use db::Database;
+pub use commands::*;
 pub use models::*;
 pub use services::*;

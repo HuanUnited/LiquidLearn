@@ -4,104 +4,116 @@
 )]
 
 mod commands;
-mod db;
+mod migrations;
 mod models;
 mod services;
 
-use db::Database;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use std::str::FromStr;
+use tauri::State;
 
 #[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}!", name)
+async fn initialize_db(db: State<'_, SqlitePool>) -> Result<String, String> {
+    // Run migrations
+    migrations::run_migrations(db.inner())
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Initialize default error types
+    services::ErrorService::init_default_error_types(db.inner()).await?;
+
+    Ok("Database initialized successfully".to_string())
 }
 
-#[tauri::command]
-async fn init_db() -> Result<String, String> {
-    match Database::new().await {
-        Ok(_) => Ok("Database initialized successfully".to_string()),
-        Err(e) => Err(format!("Database init failed: {}", e)),
-    }
-}
+#[tokio::main]
+async fn main() {
+    // Create database directory if it doesn't exist
+    let app_data_dir = tauri::api::path::app_data_dir(&tauri::Config::default())
+        .unwrap_or_else(|| std::path::PathBuf::from("./"));
 
-fn main() {
-    // Create tokio runtime for async operations
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let _enter = rt.enter();
+    std::fs::create_dir_all(&app_data_dir).ok();
 
-    // Connect to database BEFORE creating Tauri
-    let db = rt.block_on(async {
-        // Get database path from APPDATA
-        let db_path = if let Ok(appdata) = std::env::var("APPDATA") {
-            let path_str = format!("{}\\LiquidLearn\\sqlite.db", appdata);
-            std::path::PathBuf::from(&path_str)
-        } else {
-            std::path::PathBuf::from("sqlite.db")
-        };
+    // Database path
+    let db_path = app_data_dir.join("liquidlearn.db");
+    let database_url = format!("sqlite:{}", db_path.to_string_lossy());
 
-        // Create directory if it doesn't exist
-        if let Some(parent) = db_path.parent() {
-            std::fs::create_dir_all(parent).expect("Failed to create database directory");
-        }
+    // SQLite connection options
+    let connect_options = SqliteConnectOptions::from_str(&database_url)
+        .expect("Invalid database URL")
+        .create_if_missing(true);
 
-        // Connect to database
-        let database_url = format!("sqlite://{}?mode=rwc", db_path.display());
-        sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(5)
-            .connect(&database_url)
-            .await
-            .expect("Failed to connect to database")
-    });
+    // Create pool
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect_with(connect_options)
+        .await
+        .expect("Failed to create pool");
+
+    // Run migrations on startup
+    migrations::run_migrations(&pool)
+        .await
+        .expect("Failed to run migrations");
+
+    // Initialize default error types
+    services::ErrorService::init_default_error_types(&pool)
+        .await
+        .expect("Failed to initialize error types");
+
+    println!("✓ Database initialized at: {}", db_path.display());
 
     tauri::Builder::default()
-        .manage(db) // ← Pass db directly (not cloned)
+        .manage(pool)
         .invoke_handler(tauri::generate_handler![
-            greet,
-            init_db,
-            // ===== CRUD Commands =====
+            // System
+            initialize_db,
+            // Subjects
+            commands::create_subject,
+            commands::get_subject,
+            commands::list_subjects,
+            commands::update_subject,
+            commands::delete_subject,
+            // Topics
+            commands::create_topic,
+            commands::get_topic,
+            commands::list_topics_by_subject,
+            commands::update_topic,
+            commands::delete_topic,
+            // Theories
+            commands::create_theory,
+            commands::get_theory,
+            commands::list_theories_by_topic,
+            commands::get_theory_by_phase,
+            commands::update_theory,
+            commands::delete_theory,
+            // Problems
             commands::create_problem,
             commands::get_problem,
-            commands::get_full_problem,
-            commands::list_problems,
+            commands::list_problems_by_topic,
+            commands::list_problems_by_theory,
             commands::update_problem,
             commands::delete_problem,
-            commands::delete_problem_cascade,
-            // ===== Tag Commands =====
-            commands::add_tag,
-            commands::remove_tag,
-            commands::get_problem_tags,
-            commands::add_tags,
-            commands::remove_tags,
-            commands::set_tags,
-            commands::get_all_tags,
-            commands::get_problems_by_tags,
-            // ===== Search & Filter Commands =====
-            commands::search_problems,
-            commands::filter_problems,
-            // ===== Bulk & Import Commands =====
-            commands::bulk_create_problems,
-            commands::import_csv_problems,
-            // ===== Stats Commands =====
-            commands::get_problem_count,
-            commands::get_problem_count_by_difficulty,
-            // ===== FSRS Algorithm Commands =====
+            commands::mark_problem_solved,
+            commands::get_problem_with_details,
+            // Attempts
+            commands::create_attempt,
+            commands::get_attempt,
+            commands::list_attempts_by_problem,
+            commands::update_attempt_commentary,
+            commands::get_problem_attempt_stats,
+            // Errors
+            commands::log_error,
+            commands::resolve_error,
+            commands::get_error_types,
+            commands::get_errors_by_attempt,
+            commands::get_unresolved_errors_by_problem,
+            commands::init_error_types,
+            // FSRS
             commands::process_review,
-            commands::get_due_cards_count,
+            commands::get_due_cards,
             commands::get_fsrs_stats,
-            commands::get_fsrs_parameters,
-            // ===== Study Phase Commands =====
-            commands::get_study_progress,
-            commands::get_all_study_progress,
-            commands::advance_study_phase,
-            commands::update_study_phase_time,
-            commands::get_study_summary,
-            commands::get_phase_queue,
-            // ===== Error Logging Commands =====
-            commands::error_logging_commands::log_error,
-            commands::error_logging_commands::resolve_error,
-            commands::error_logging_commands::get_error_types,
-            commands::error_logging_commands::get_error_frequency,
-            commands::error_logging_commands::get_problem_error_history,
-            commands::error_logging_commands::get_unresolved_errors,
+            commands::get_fsrs_card,
+            commands::get_fsrs_card_by_problem,
+            commands::get_cards_by_state,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

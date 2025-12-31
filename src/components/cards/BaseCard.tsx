@@ -1,79 +1,70 @@
-import React, { ReactNode } from 'react';
-import { ChevronDown } from 'lucide-react';
+import React from "react";
+import { X } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface BaseCardProps {
+  id: string;
   title: string;
-  subtitle?: string;
-  icon?: ReactNode;
-  children: ReactNode;
-  onClick?: () => void;
-  isExpandable?: boolean;
-  isExpanded?: boolean;
-  onToggleExpand?: () => void;
+  children: React.ReactNode;
   className?: string;
-  headerClassName?: string;
-  bodyClassName?: string;
-  variant?: 'default' | 'success' | 'warning' | 'danger';
+  onClose?: () => void;
+  headerAction?: React.ReactNode;
+  variant?: "default" | "success" | "warning" | "error";
+  isLoading?: boolean;
 }
 
 export const BaseCard: React.FC<BaseCardProps> = ({
+  id,
   title,
-  subtitle,
-  icon,
   children,
-  onClick,
-  isExpandable = false,
-  isExpanded = true,
-  onToggleExpand,
-  className = '',
-  headerClassName = '',
-  bodyClassName = '',
-  variant = 'default',
+  className,
+  onClose,
+  headerAction,
+  variant = "default",
+  isLoading = false,
 }) => {
-  const variantClasses = {
-    default: 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700',
-    success: 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-700',
-    warning: 'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-700',
-    danger: 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-700',
+  const variantStyles = {
+    default: "bg-slate-900/50 border-slate-700",
+    success: "bg-emerald-950/30 border-emerald-700/50",
+    warning: "bg-amber-950/30 border-amber-700/50",
+    error: "bg-red-950/30 border-red-700/50",
   };
 
   return (
     <div
-      className={`card-base ${variantClasses[variant]} ${className}`}
-      onClick={onClick}
-      role={onClick ? 'button' : undefined}
-      tabIndex={onClick ? 0 : undefined}
+      className={cn(
+        "rounded-lg border backdrop-blur-sm transition-all duration-200",
+        "flex flex-col h-full overflow-hidden",
+        variantStyles[variant],
+        className
+      )}
     >
       {/* Header */}
-      <div
-        className={`card-header flex items-center justify-between cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors ${headerClassName}`}
-        onClick={() => isExpandable && onToggleExpand?.()}
-      >
-        <div className="flex items-center gap-3">
-          {icon && <div className="text-xl">{icon}</div>}
-          <div>
-            <h2>{title}</h2>
-            {subtitle && (
-              <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-                {subtitle}
-              </p>
-            )}
-          </div>
+      <div className="flex items-center justify-between p-4 border-b border-slate-700/50">
+        <h3 className="text-sm font-semibold text-slate-100">{title}</h3>
+        <div className="flex items-center gap-2">
+          {headerAction}
+          {onClose && (
+            <button
+              onClick={onClose}
+              className="p-1 hover:bg-slate-700/50 rounded transition-colors"
+            >
+              <X size={16} className="text-slate-400" />
+            </button>
+          )}
         </div>
-
-        {isExpandable && (
-          <ChevronDown
-            size={20}
-            className={`text-slate-600 dark:text-slate-400 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''
-              }`}
-          />
-        )}
       </div>
 
-      {/* Body */}
-      {(!isExpandable || isExpanded) && (
-        <div className={`card-body ${bodyClassName}`}>{children}</div>
-      )}
+      {/* Content */}
+      <div className="flex-1 overflow-auto p-4">
+        {isLoading ? (
+          <div className="flex items-center justify-center h-full">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500" />
+          </div>
+        ) : (
+          children
+        )}
+      </div>
     </div>
   );
 };

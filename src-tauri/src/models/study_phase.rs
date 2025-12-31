@@ -66,12 +66,9 @@ impl StudyPhase {
 pub struct StudyPhaseProgress {
     pub id: String,
     pub problem_id: String,
-    pub current_phase: i32,           // 1-4
-    pub current_step: i32,            // 1-N (substeps within phase)
-    pub phase_1_time_seconds: i32,    // Time spent in decode
-    pub phase_2_time_seconds: i32,    // Time spent in encode
-    pub phase_3_time_seconds: i32,    // Time spent in recall
-    pub phase_4_time_seconds: i32,    // Time spent in reflect
+    pub current_phase: i32, // 1-4
+    pub current_step: i32,  // 1-N (substeps within phase)
+    pub phase_time_total: i32,
     pub completed_at: Option<String>, // When all 4 phases finished
     pub created_at: String,
     pub updated_at: String,
@@ -83,10 +80,7 @@ impl StudyPhaseProgress {
     }
 
     pub fn get_total_time(&self) -> i32 {
-        self.phase_1_time_seconds
-            + self.phase_2_time_seconds
-            + self.phase_3_time_seconds
-            + self.phase_4_time_seconds
+        self.phase_time_total
     }
 
     pub fn is_completed(&self) -> bool {
@@ -152,10 +146,7 @@ mod tests {
             problem_id: "p1".to_string(),
             current_phase: 2,
             current_step: 1,
-            phase_1_time_seconds: 100,
-            phase_2_time_seconds: 50,
-            phase_3_time_seconds: 0,
-            phase_4_time_seconds: 0,
+            phase_time_total: 100,
             completed_at: None,
             created_at: "2024-01-01".to_string(),
             updated_at: "2024-01-01".to_string(),
@@ -172,10 +163,7 @@ mod tests {
             problem_id: "p1".to_string(),
             current_phase: 4,
             current_step: 1,
-            phase_1_time_seconds: 100,
-            phase_2_time_seconds: 150,
-            phase_3_time_seconds: 120,
-            phase_4_time_seconds: 80,
+            phase_time_total: 200,
             completed_at: Some("2024-01-02".to_string()),
             created_at: "2024-01-01".to_string(),
             updated_at: "2024-01-02".to_string(),

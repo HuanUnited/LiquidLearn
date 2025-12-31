@@ -1,27 +1,24 @@
 [package]
-name = "liquidlearn"
+name = "learning-app"
 version = "0.1.0"
-description = "LiquidLearn - Spaced Repetition Learning App"
-authors = ["you"]
+description = "Hierarchical learning system with FSRS spaced repetition"
+authors = ["Your Name"]
 edition = "2021"
 
 [build-dependencies]
-tauri-build = { version = "1.5.x", features = [] }
+tauri-build = { version = "1.5", features = [] }
 
 [dependencies]
-tauri = { version = "1.6", features = [] }
-tokio = { version = "1", features = ["full"] }
-sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite"] }
-serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-uuid = { version = "1", features = ["v4", "serde"] }
+serde = { version = "1.0", features = ["derive"] }
+tauri = { version = "1.6", features = ["shell-open"] }
+tokio = { version = "1", features = ["full"] }
+sqlx = { version = "0.7", features = ["runtime-tokio-native-tls", "sqlite"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
-thiserror = "1.0"
 
-[dev-dependencies]
-tokio-test = "0.4"
-
-[profile.release]
-codegen-units = 1
-lto = true
-opt-level = 3
+# Ensure webkit2gtk is ONLY for Linux
+[target."cfg(target_os = \"linux\")".dependencies]
+webkit2gtk = "0.18"
+cocoa = "0.24"
+objc = "0.2"
