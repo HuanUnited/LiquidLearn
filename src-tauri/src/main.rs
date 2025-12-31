@@ -28,22 +28,23 @@ fn main() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let _enter = rt.enter();
 
-    // Connect to database - use APPDATA for Windows
+    // Connect to database BEFORE creating Tauri
     let db = rt.block_on(async {
-        // Get database path from APPDATA or use local fallback
+        // Get database path from APPDATA
         let db_path = if let Ok(appdata) = std::env::var("APPDATA") {
-            format!("{}\\LiquidLearn\\sqlite.db", appdata)
+            let path_str = format!("{}\\LiquidLearn\\sqlite.db", appdata);
+            std::path::PathBuf::from(&path_str)
         } else {
-            "sqlite.db".to_string()
+            std::path::PathBuf::from("sqlite.db")
         };
 
         // Create directory if it doesn't exist
-        if let Some(parent) = std::path::Path::new(&db_path).parent() {
+        if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent).expect("Failed to create database directory");
         }
 
         // Connect to database
-        let database_url = format!("sqlite://{}", db_path);
+        let database_url = format!("sqlite://{}?mode=rwc", db_path.display());
         sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(5)
             .connect(&database_url)
@@ -52,7 +53,7 @@ fn main() {
     });
 
     tauri::Builder::default()
-        .manage(db.clone())
+        .manage(db) // ← Pass db directly (not cloned)
         .invoke_handler(tauri::generate_handler![
             greet,
             init_db,
