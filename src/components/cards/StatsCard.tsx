@@ -67,7 +67,7 @@ export const StatsCard: React.FC = () => {
           {phases.map((phase) => (
             <div
               key={phase.name}
-              className={`stat-card bg-gradient-to-br ${phase.color} p-4`}
+              className={`stat-card bg-linear-to-br ${phase.color} p-4`}
             >
               <div className="flex items-center justify-between mb-2">
                 <p className="text-sm font-medium opacity-90">{phase.name}</p>

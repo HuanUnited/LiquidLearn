@@ -1,9 +1,7 @@
 use crate::models::study_phase::{
-    AdvancePhaseRequest, PhaseAdvanceResult, StudyPhase, StudyPhaseProgress, UpdatePhaseTimeRequest,
+    AdvancePhaseRequest, PhaseAdvanceResult, StudyPhaseProgress, UpdatePhaseTimeRequest,
 };
-use chrono::Local;
 use sqlx::SqlitePool;
-use uuid::Uuid;
 
 pub struct StudyPhaseService;
 

@@ -26,6 +26,6 @@
   }
 
   .stat-card {
-    @apply bg-gradient-to-br rounded-lg p-4 text-white shadow-md;
+    @apply bg-linear-to-br rounded-lg p-4 text-white shadow-md;
   }
 }

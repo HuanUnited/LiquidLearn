@@ -106,7 +106,7 @@ impl FsrsService {
     fn calculate_difficulty(
         rating: f64,
         old_difficulty: f64,
-        state: CardState,
+        _state: CardState,
         params: &FsrsParameters,
     ) -> f64 {
         // Higher rating = lower difficulty increase (easier perception)
@@ -126,7 +126,7 @@ impl FsrsService {
     fn calculate_stability(
         rating: f64,
         old_stability: f64,
-        difficulty: f64,
+        _difficulty: f64,
         state: CardState,
         params: &FsrsParameters,
     ) -> f64 {
@@ -199,16 +199,34 @@ impl FsrsService {
         Ok(())
     }
 
-    /// Update card with new values
+    /// Update card with new values (with error multiplier applied)
     async fn update_card(result: &ReviewResult, pool: &SqlitePool) -> Result<(), sqlx::Error> {
         let now = chrono::Utc::now().to_rfc3339();
+
+        // Get error impact modifier for this card
+        let error_modifier: (f64,) = sqlx::query_as(
+            "SELECT COALESCE(error_impact_modifier, 1.0) FROM fsrs_cards WHERE id = ?",
+        )
+        .bind(&result.card_id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or((1.0,));
+
+        // Apply error multiplier to interval
+        // Error multiplier: 1.5x (high impact), 1.0x (medium), 0.7x (low)
+        let adjusted_interval = ((result.new_interval as f64) * error_modifier.0).ceil() as i32;
+
+        // Recalculate due date with adjusted interval
+        let today = Local::now().date_naive();
+        let adjusted_due = today + Duration::days(adjusted_interval as i64);
+
         sqlx::query(
             "UPDATE fsrs_cards
-             SET due = ?, stability = ?, difficulty = ?, state = ?, 
-                 reps = reps + 1, updated_at = ?
-             WHERE id = ?",
+        SET due = ?, stability = ?, difficulty = ?, state = ?,
+        reps = reps + 1, updated_at = ?
+        WHERE id = ?",
         )
-        .bind(&result.next_due)
+        .bind(adjusted_due.to_string())
         .bind(result.new_stability)
         .bind(result.new_difficulty)
         .bind(&result.new_state)
@@ -216,6 +234,7 @@ impl FsrsService {
         .bind(&result.card_id)
         .execute(pool)
         .await?;
+
         Ok(())
     }
 
@@ -270,6 +289,47 @@ impl FsrsService {
             "relearning": relearning.0,
             "due_today": due_today.0,
         }))
+    }
+
+    /// Update error impact modifier for a card based on unresolved errors
+    pub async fn update_error_modifier(card_id: &str, pool: &SqlitePool) -> Result<(), String> {
+        // Get problem_id for this card
+        let problem_result: (String,) =
+            sqlx::query_as("SELECT problem_id FROM fsrs_cards WHERE id = ?")
+                .bind(card_id)
+                .fetch_one(pool)
+                .await
+                .map_err(|e| format!("Failed to get problem: {}", e))?;
+
+        let problem_id = problem_result.0;
+
+        // Calculate average error multiplier from problem_error_history
+        let modifier_result: (f64,) = sqlx::query_as(
+            "SELECT COALESCE(AVG(et.multiplier), 1.0)
+         FROM problem_error_history peh
+         JOIN error_types et ON peh.error_type_id = et.id
+         WHERE peh.problem_id = ?",
+        )
+        .bind(&problem_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("Failed to calculate modifier: {}", e))?;
+
+        let avg_multiplier = modifier_result.0;
+
+        // Update fsrs_cards with the new modifier
+        sqlx::query(
+            "UPDATE fsrs_cards 
+         SET error_impact_modifier = ?
+         WHERE id = ?",
+        )
+        .bind(avg_multiplier)
+        .bind(card_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to update modifier: {}", e))?;
+
+        Ok(())
     }
 }
 

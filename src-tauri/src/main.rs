@@ -24,17 +24,35 @@ async fn init_db() -> Result<String, String> {
 }
 
 fn main() {
-    // Initialize database on startup
+    // Create tokio runtime for async operations
     let rt = tokio::runtime::Runtime::new().unwrap();
+    let _enter = rt.enter();
+
+    // Connect to database - use APPDATA for Windows
     let db = rt.block_on(async {
-        Database::new().await.unwrap_or_else(|e| {
-            eprintln!("Failed to initialize database: {}", e);
-            std::process::exit(1);
-        })
+        // Get database path from APPDATA or use local fallback
+        let db_path = if let Ok(appdata) = std::env::var("APPDATA") {
+            format!("{}\\LiquidLearn\\sqlite.db", appdata)
+        } else {
+            "sqlite.db".to_string()
+        };
+
+        // Create directory if it doesn't exist
+        if let Some(parent) = std::path::Path::new(&db_path).parent() {
+            std::fs::create_dir_all(parent).expect("Failed to create database directory");
+        }
+
+        // Connect to database
+        let database_url = format!("sqlite://{}", db_path);
+        sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(5)
+            .connect(&database_url)
+            .await
+            .expect("Failed to connect to database")
     });
 
     tauri::Builder::default()
-        .manage(db)
+        .manage(db.clone())
         .invoke_handler(tauri::generate_handler![
             greet,
             init_db,
@@ -76,6 +94,13 @@ fn main() {
             commands::update_study_phase_time,
             commands::get_study_summary,
             commands::get_phase_queue,
+            // ===== Error Logging Commands =====
+            commands::error_logging_commands::log_error,
+            commands::error_logging_commands::resolve_error,
+            commands::error_logging_commands::get_error_types,
+            commands::error_logging_commands::get_error_frequency,
+            commands::error_logging_commands::get_problem_error_history,
+            commands::error_logging_commands::get_unresolved_errors,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

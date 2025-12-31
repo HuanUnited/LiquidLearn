@@ -68,7 +68,7 @@ export const DashboardCard: React.FC = () => {
         {/* Main Stats Grid */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {/* Due Today */}
-          <div className="stat-card bg-gradient-to-br from-blue-500 to-blue-600">
+          <div className="stat-card bg-linear-to-br from-blue-500 to-blue-600">
             <div className="flex items-center justify-between mb-2">
               <p className="text-sm font-medium opacity-90">Due Today</p>
               <Zap size={20} />
@@ -78,7 +78,7 @@ export const DashboardCard: React.FC = () => {
           </div>
 
           {/* Completion Rate */}
-          <div className="stat-card bg-gradient-to-br from-green-500 to-green-600">
+          <div className="stat-card bg-linear-to-br from-green-500 to-green-600">
             <div className="flex items-center justify-between mb-2">
               <p className="text-sm font-medium opacity-90">Completed</p>
               <CheckCircle size={20} />
@@ -88,7 +88,7 @@ export const DashboardCard: React.FC = () => {
           </div>
 
           {/* Total Problems */}
-          <div className="stat-card bg-gradient-to-br from-purple-500 to-purple-600">
+          <div className="stat-card bg-linear-to-br from-purple-500 to-purple-600">
             <div className="flex items-center justify-between mb-2">
               <p className="text-sm font-medium opacity-90">Total</p>
               <BookOpen size={20} />
@@ -98,7 +98,7 @@ export const DashboardCard: React.FC = () => {
           </div>
 
           {/* Time Invested */}
-          <div className="stat-card bg-gradient-to-br from-orange-500 to-orange-600">
+          <div className="stat-card bg-linear-to-br from-orange-500 to-orange-600">
             <div className="flex items-center justify-between mb-2">
               <p className="text-sm font-medium opacity-90">Time</p>
               <TrendingUp size={20} />
@@ -130,8 +130,8 @@ export const DashboardCard: React.FC = () => {
                   className={`${item.color} h-full transition-all duration-300`}
                   style={{
                     width: `${stats?.total_cards && stats.total_cards > 0
-                        ? (item.count / stats.total_cards) * 100
-                        : 0
+                      ? (item.count / stats.total_cards) * 100
+                      : 0
                       }%`,
                   }}
                 />
