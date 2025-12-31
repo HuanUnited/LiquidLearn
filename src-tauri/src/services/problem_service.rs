@@ -1,330 +1,449 @@
-use anyhow::{Context, Result};
-use chrono::Utc;
+use crate::models::{CreateProblemRequest, Problem};
 use sqlx::SqlitePool;
 use uuid::Uuid;
-
-use crate::models::{
-    CreateProblemRequest, Problem, ProblemMastery, ProblemWithMastery, UpdateProblemRequest,
-};
 
 pub struct ProblemService;
 
 impl ProblemService {
-    /// Create new problem (also creates FSRS card, mastery, and study phase progress)
-    pub async fn create(req: CreateProblemRequest, pool: &SqlitePool) -> Result<Problem> {
-        let problem_id = Uuid::new_v4().to_string();
-        let card_id = Uuid::new_v4().to_string();
-        let mastery_id = Uuid::new_v4().to_string();
-        let progress_id = Uuid::new_v4().to_string();
-
-        // Validate difficulty
-        if req.difficulty < 1 || req.difficulty > 5 {
-            return Err(anyhow::anyhow!("Difficulty must be between 1 and 5"));
-        }
-
-        // Start transaction
-        let mut tx = pool.begin().await?;
+    /// Create a new problem in the database
+    pub async fn create(
+        request: CreateProblemRequest,
+        pool: &SqlitePool,
+    ) -> Result<Problem, sqlx::Error> {
+        let id = Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
 
         // Insert problem
-        sqlx::query(
+        let problem = sqlx::query_as::<_, Problem>(
             "INSERT INTO problems (id, title, description, difficulty, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?)
+             RETURNING id, title, description, difficulty, created_at, updated_at",
         )
-        .bind(&problem_id)
-        .bind(&req.title)
-        .bind(&req.description)
-        .bind(req.difficulty)
-        .bind(Utc::now())
-        .bind(Utc::now())
-        .execute(&mut *tx)
-        .await
-        .context("Failed to insert problem")?;
+        .bind(&id)
+        .bind(&request.title)
+        .bind(&request.description)
+        .bind(request.difficulty)
+        .bind(&now)
+        .bind(&now)
+        .fetch_one(pool)
+        .await?;
 
-        // Create FSRS card
-        let fsrs_difficulty = match req.difficulty {
-            1 => 2.0,
-            2 => 3.0,
-            3 => 5.0,
-            4 => 7.0,
-            5 => 9.0,
-            _ => 5.0,
-        };
+        // Create associated FSRS card
+        Self::create_fsrs_card(&id, pool).await?;
 
-        sqlx::query(
-            "INSERT INTO fsrs_cards 
-             (id, problem_id, due, stability, difficulty, state, created_at, updated_at)
-             VALUES (?, ?, DATE('now'), 0.0, ?, 'new', ?, ?)",
-        )
-        .bind(&card_id)
-        .bind(&problem_id)
-        .bind(fsrs_difficulty)
-        .bind(Utc::now())
-        .bind(Utc::now())
-        .execute(&mut *tx)
-        .await
-        .context("Failed to create FSRS card")?;
+        // Create associated study phase progress
+        Self::create_study_phase(&id, pool).await?;
 
-        // Create problem mastery
-        sqlx::query(
-            "INSERT INTO problem_mastery 
-             (id, problem_id, solved, mastery_percent, updated_at)
-             VALUES (?, ?, 0, 0, ?)",
-        )
-        .bind(&mastery_id)
-        .bind(&problem_id)
-        .bind(Utc::now())
-        .execute(&mut *tx)
-        .await
-        .context("Failed to create problem mastery")?;
-
-        // Create study phase progress
-        sqlx::query(
-            "INSERT INTO study_phase_progress 
-             (id, problem_id, current_phase, current_step, time_spent_seconds, created_at, updated_at)
-             VALUES (?, ?, 1, 1, 0, ?, ?)"
-        )
-        .bind(&progress_id)
-        .bind(&problem_id)
-        .bind(Utc::now())
-        .bind(Utc::now())
-        .execute(&mut *tx)
-        .await
-        .context("Failed to create study phase progress")?;
-
-        tx.commit().await?;
-
-        // Fetch and return created problem
-        Self::read(&problem_id, pool).await
-    }
-
-    /// Get single problem by ID
-    pub async fn read(problem_id: &str, pool: &SqlitePool) -> Result<Problem> {
-        let problem = sqlx::query_as::<_, Problem>("SELECT * FROM problems WHERE id = ?")
-            .bind(problem_id)
-            .fetch_one(pool)
-            .await
-            .context("Problem not found")?;
+        // Create associated problem mastery
+        Self::create_mastery(&id, pool).await?;
 
         Ok(problem)
     }
 
-    /// Get problem with mastery and tags
-    pub async fn read_with_details(
-        problem_id: &str,
-        pool: &SqlitePool,
-    ) -> Result<ProblemWithMastery> {
-        let problem = Self::read(problem_id, pool).await?;
-
-        // Get mastery
-        let mastery = sqlx::query_as::<_, ProblemMastery>(
-            "SELECT * FROM problem_mastery WHERE problem_id = ?",
+    /// Get a problem by ID
+    pub async fn get(id: &str, pool: &SqlitePool) -> Result<Problem, sqlx::Error> {
+        sqlx::query_as::<_, Problem>(
+            "SELECT id, title, description, difficulty, created_at, updated_at 
+             FROM problems 
+             WHERE id = ?",
         )
-        .bind(problem_id)
-        .fetch_optional(pool)
-        .await?;
-
-        // Get tags
-        let tags: Vec<String> =
-            sqlx::query_scalar("SELECT tag_name FROM problem_tags WHERE problem_id = ?")
-                .bind(problem_id)
-                .fetch_all(pool)
-                .await?;
-
-        Ok(ProblemWithMastery {
-            problem,
-            mastery,
-            tags,
-        })
+        .bind(id)
+        .fetch_one(pool)
+        .await
     }
 
-    /// Update problem
-    pub async fn update(
-        problem_id: &str,
-        req: UpdateProblemRequest,
+    /// List all problems with optional filtering
+    pub async fn list(
         pool: &SqlitePool,
-    ) -> Result<Problem> {
-        // Validate difficulty if provided
-        if let Some(diff) = req.difficulty {
-            if diff < 1 || diff > 5 {
-                return Err(anyhow::anyhow!("Difficulty must be between 1 and 5"));
+        difficulty: Option<i32>,
+        solved_only: Option<bool>,
+    ) -> Result<Vec<Problem>, sqlx::Error> {
+        let mut query = String::from(
+            "SELECT p.id, p.title, p.description, p.difficulty, p.created_at, p.updated_at 
+             FROM problems p",
+        );
+
+        if solved_only.unwrap_or(false) {
+            query.push_str(
+                " JOIN problem_mastery pm ON p.id = pm.problem_id 
+                  WHERE pm.solved = 1",
+            );
+        }
+
+        if let Some(diff) = difficulty {
+            if solved_only.is_some() {
+                query.push_str(&format!(" AND p.difficulty = {}", diff));
+            } else {
+                query.push_str(&format!(" WHERE p.difficulty = {}", diff));
             }
         }
 
-        // Simple approach: update only provided fields
-        if let Some(title) = req.title {
-            sqlx::query("UPDATE problems SET title = ?, updated_at = ? WHERE id = ?")
-                .bind(&title)
-                .bind(Utc::now())
-                .bind(problem_id)
-                .execute(pool)
-                .await?;
-        }
+        query.push_str(" ORDER BY p.created_at DESC");
 
-        if let Some(desc) = req.description {
-            sqlx::query("UPDATE problems SET description = ?, updated_at = ? WHERE id = ?")
-                .bind(&desc)
-                .bind(Utc::now())
-                .bind(problem_id)
-                .execute(pool)
-                .await?;
-        }
-
-        if let Some(diff) = req.difficulty {
-            sqlx::query("UPDATE problems SET difficulty = ?, updated_at = ? WHERE id = ?")
-                .bind(diff)
-                .bind(Utc::now())
-                .bind(problem_id)
-                .execute(pool)
-                .await?;
-        }
-
-        Self::read(problem_id, pool).await
+        sqlx::query_as::<_, Problem>(&query).fetch_all(pool).await
     }
 
-    /// Delete problem (cascades to FSRS, mastery, tags, study progress)
-    pub async fn delete(problem_id: &str, pool: &SqlitePool) -> Result<()> {
-        let result = sqlx::query("DELETE FROM problems WHERE id = ?")
+    /// Delete a problem (cascades to related records)
+    pub async fn delete(id: &str, pool: &SqlitePool) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM problems WHERE id = ?")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Update an existing problem
+    pub async fn update(
+        id: &str,
+        title: Option<String>,
+        description: Option<String>,
+        difficulty: Option<i32>,
+        pool: &SqlitePool,
+    ) -> Result<Problem, sqlx::Error> {
+        // Get current problem
+        let current = Self::get(id, pool).await?;
+
+        // Use provided values or keep existing
+        let new_title = title.unwrap_or(current.title);
+        let new_description = description.or(current.description);
+        let new_difficulty = difficulty.unwrap_or(current.difficulty);
+        let now = chrono::Utc::now().to_rfc3339();
+
+        sqlx::query_as::<_, Problem>(
+            "UPDATE problems 
+             SET title = ?, description = ?, difficulty = ?, updated_at = ?
+             WHERE id = ?
+             RETURNING id, title, description, difficulty, created_at, updated_at",
+        )
+        .bind(&new_title)
+        .bind(&new_description)
+        .bind(new_difficulty)
+        .bind(&now)
+        .bind(id)
+        .fetch_one(pool)
+        .await
+    }
+
+    /// Add a tag to a problem
+    pub async fn add_tag(
+        problem_id: &str,
+        tag_name: &str,
+        pool: &SqlitePool,
+    ) -> Result<(), sqlx::Error> {
+        let id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT OR IGNORE INTO problem_tags (id, problem_id, tag_name)
+             VALUES (?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(problem_id)
+        .bind(tag_name)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Remove a tag from a problem
+    pub async fn remove_tag(
+        problem_id: &str,
+        tag_name: &str,
+        pool: &SqlitePool,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM problem_tags WHERE problem_id = ? AND tag_name = ?")
+            .bind(problem_id)
+            .bind(tag_name)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Get all tags for a problem
+    pub async fn get_tags(problem_id: &str, pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> {
+        let tags: Vec<(String,)> = sqlx::query_as(
+            "SELECT tag_name FROM problem_tags WHERE problem_id = ? ORDER BY tag_name",
+        )
+        .bind(problem_id)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(tags.into_iter().map(|(tag,)| tag).collect())
+    }
+
+    /// Full-text search problems
+    pub async fn search(query: &str, pool: &SqlitePool) -> Result<Vec<Problem>, sqlx::Error> {
+        sqlx::query_as::<_, Problem>(
+            "SELECT p.id, p.title, p.description, p.difficulty, p.created_at, p.updated_at
+             FROM problems p
+             WHERE p.id IN (
+                 SELECT id FROM problems_fts WHERE problems_fts MATCH ?
+             )
+             ORDER BY rank
+             LIMIT 100",
+        )
+        .bind(format!("{}*", query)) // Prefix search
+        .fetch_all(pool)
+        .await
+    }
+
+    /// Get problems with multiple filters
+    pub async fn filter(
+        difficulty: Option<i32>,
+        tags: Option<Vec<String>>,
+        solved_only: Option<bool>,
+        pool: &SqlitePool,
+    ) -> Result<Vec<Problem>, sqlx::Error> {
+        let mut query = String::from(
+            "SELECT DISTINCT p.id, p.title, p.description, p.difficulty, p.created_at, p.updated_at
+             FROM problems p",
+        );
+
+        let mut has_where = false;
+
+        // Add tag filter
+        if let Some(tag_list) = &tags {
+            if !tag_list.is_empty() {
+                query.push_str(" LEFT JOIN problem_tags pt ON p.id = pt.problem_id");
+                query.push_str(" WHERE pt.tag_name IN (");
+                for (i, _) in tag_list.iter().enumerate() {
+                    if i > 0 {
+                        query.push(',');
+                    }
+                    query.push('?');
+                }
+                query.push(')');
+                has_where = true;
+            }
+        }
+
+        // Add solved filter
+        if solved_only.unwrap_or(false) {
+            if has_where {
+                query.push_str(
+                    " AND p.id IN (SELECT problem_id FROM problem_mastery WHERE solved = 1)",
+                );
+            } else {
+                query.push_str(
+                    " WHERE p.id IN (SELECT problem_id FROM problem_mastery WHERE solved = 1)",
+                );
+                has_where = true;
+            }
+        }
+
+        // Add difficulty filter
+        if let Some(diff) = difficulty {
+            if has_where {
+                query.push_str(&format!(" AND p.difficulty = {}", diff));
+            } else {
+                query.push_str(&format!(" WHERE p.difficulty = {}", diff));
+            }
+        }
+
+        query.push_str(" ORDER BY p.created_at DESC");
+
+        sqlx::query_as::<_, Problem>(&query).fetch_all(pool).await
+    }
+
+    /// Bulk create problems from CSV-like data
+    pub async fn bulk_create(
+        problems_data: Vec<CreateProblemRequest>,
+        pool: &SqlitePool,
+    ) -> Result<Vec<Problem>, sqlx::Error> {
+        let mut created = Vec::new();
+
+        for request in problems_data {
+            match Self::create(request, pool).await {
+                Ok(problem) => created.push(problem),
+                Err(_) => continue, // Skip failed inserts
+            }
+        }
+
+        Ok(created)
+    }
+
+    /// Get problem count by difficulty
+    pub async fn count_by_difficulty(pool: &SqlitePool) -> Result<Vec<(i32, i64)>, sqlx::Error> {
+        sqlx::query_as::<_, (i32, i64)>(
+            "SELECT difficulty, COUNT(*) as count FROM problems GROUP BY difficulty ORDER BY difficulty"
+        )
+        .fetch_all(pool)
+        .await
+    }
+
+    /// Get total problem count
+    pub async fn count_total(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
+        let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM problems")
+            .fetch_one(pool)
+            .await?;
+        Ok(count)
+    }
+
+    /// Get all problem details including tags and mastery
+    pub async fn get_full(id: &str, pool: &SqlitePool) -> Result<serde_json::Value, sqlx::Error> {
+        let problem = Self::get(id, pool).await?;
+        let tags = Self::get_tags(id, pool).await?;
+
+        let mastery: Option<(bool, f64)> = sqlx::query_as::<_, (i32, f64)>(
+            "SELECT solved, mastery_percent FROM problem_mastery WHERE problem_id = ?",
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?
+        .map(|(s, m)| (s != 0, m));
+
+        Ok(serde_json::json!({
+            "problem": problem,
+            "tags": tags,
+            "mastery": mastery,
+        }))
+    }
+
+    /// Delete problem and all related data
+    pub async fn delete_with_cascade(id: &str, pool: &SqlitePool) -> Result<(), sqlx::Error> {
+        // Delete cascade happens automatically due to FOREIGN KEY constraints
+        sqlx::query("DELETE FROM problems WHERE id = ?")
+            .bind(id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Add multiple tags to a problem
+    pub async fn add_tags(
+        problem_id: &str,
+        tag_names: Vec<String>,
+        pool: &SqlitePool,
+    ) -> Result<(), sqlx::Error> {
+        for tag in tag_names {
+            Self::add_tag(problem_id, &tag, pool).await?;
+        }
+        Ok(())
+    }
+
+    /// Remove multiple tags from a problem
+    pub async fn remove_tags(
+        problem_id: &str,
+        tag_names: Vec<String>,
+        pool: &SqlitePool,
+    ) -> Result<(), sqlx::Error> {
+        for tag in tag_names {
+            Self::remove_tag(problem_id, &tag, pool).await?;
+        }
+        Ok(())
+    }
+
+    /// Replace all tags for a problem
+    pub async fn set_tags(
+        problem_id: &str,
+        tag_names: Vec<String>,
+        pool: &SqlitePool,
+    ) -> Result<(), sqlx::Error> {
+        // Delete existing tags
+        sqlx::query("DELETE FROM problem_tags WHERE problem_id = ?")
             .bind(problem_id)
             .execute(pool)
             .await?;
 
-        if result.rows_affected() == 0 {
-            return Err(anyhow::anyhow!("Problem not found"));
-        }
-
-        Ok(())
+        // Add new tags
+        Self::add_tags(problem_id, tag_names, pool).await
     }
 
-    /// List problems with optional filtering
-    pub async fn list(
-        filter: Option<String>, // 'solved', 'unsolved', 'all'
-        sort: Option<String>,   // 'difficulty', 'created', 'mastery'
-        limit: i32,
-        offset: i32,
+    /// Get all unique tags in database
+    pub async fn get_all_tags(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> {
+        let tags: Vec<(String,)> =
+            sqlx::query_as("SELECT DISTINCT tag_name FROM problem_tags ORDER BY tag_name")
+                .fetch_all(pool)
+                .await?;
+
+        Ok(tags.into_iter().map(|(tag,)| tag).collect())
+    }
+
+    /// Get problems by multiple tags (AND logic)
+    pub async fn get_by_tags(
+        tag_names: Vec<String>,
         pool: &SqlitePool,
-    ) -> Result<Vec<ProblemWithMastery>> {
-        // Build base query
-        let base_query =
+    ) -> Result<Vec<Problem>, sqlx::Error> {
+        if tag_names.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut query = String::from(
             "SELECT p.id, p.title, p.description, p.difficulty, p.created_at, p.updated_at
-                      FROM problems p
-                      LEFT JOIN problem_mastery pm ON p.id = pm.problem_id
-                      WHERE 1=1";
+             FROM problems p
+             WHERE p.id IN (
+                 SELECT problem_id FROM problem_tags 
+                 WHERE tag_name IN (",
+        );
 
-        let mut query = String::from(base_query);
-
-        // Apply filter
-        if let Some(f) = &filter {
-            match f.as_str() {
-                "solved" => query.push_str(" AND pm.solved = 1"),
-                "unsolved" => query.push_str(" AND pm.solved = 0"),
-                _ => {} // "all" or invalid - no filter
+        for (i, _) in tag_names.iter().enumerate() {
+            if i > 0 {
+                query.push(',');
             }
+            query.push('?');
         }
 
-        // Apply sort
-        let order_by = match sort.as_deref() {
-            Some("difficulty") => " ORDER BY p.difficulty DESC",
-            Some("mastery") => " ORDER BY pm.mastery_percent DESC",
-            _ => " ORDER BY p.created_at DESC", // default: newest first
-        };
-        query.push_str(order_by);
+        query.push_str(
+            ")
+                 GROUP BY problem_id
+                 HAVING COUNT(DISTINCT tag_name) = ?",
+        );
 
-        // Add pagination
-        query.push_str(" LIMIT ? OFFSET ?");
-
-        // Execute query with explicit type annotation
-        let problems = sqlx::query_as::<_, Problem>(&query)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(pool)
-            .await?;
-
-        // Fetch details for each problem
-        let mut results = Vec::new();
-        for problem in problems {
-            let details = Self::read_with_details(&problem.id, pool).await?;
-            results.push(details);
+        let mut q = sqlx::query_as::<_, Problem>(&query);
+        for tag in tag_names.iter() {
+            q = q.bind(tag);
         }
+        q = q.bind(tag_names.len() as i32);
 
-        Ok(results)
+        q.fetch_all(pool).await
     }
 
-    /// Search problems
-    pub async fn search(query: &str, limit: i32, pool: &SqlitePool) -> Result<Vec<Problem>> {
-        let problems = sqlx::query_as::<_, Problem>(
-            "SELECT * FROM problems 
-             WHERE title LIKE ? OR description LIKE ?
-             ORDER BY created_at DESC
-             LIMIT ?",
-        )
-        .bind(format!("%{}%", query))
-        .bind(format!("%{}%", query))
-        .bind(limit)
-        .fetch_all(pool)
-        .await?;
+    // === Helper Methods ===
 
-        Ok(problems)
-    }
-
-    /// Add tag to problem
-    pub async fn add_tag(problem_id: &str, tag_name: &str, pool: &SqlitePool) -> Result<()> {
-        let tag_id = Uuid::new_v4().to_string();
-
+    async fn create_fsrs_card(problem_id: &str, pool: &SqlitePool) -> Result<(), sqlx::Error> {
+        let id = Uuid::new_v4().to_string();
         sqlx::query(
-            "INSERT INTO problem_tags (id, problem_id, tag_name, created_at)
-             VALUES (?, ?, ?, ?)
-             ON CONFLICT(problem_id, tag_name) DO NOTHING",
+            "INSERT INTO fsrs_cards (id, problem_id, due, stability, difficulty, state)
+             VALUES (?, ?, DATE('now'), 0.0, 5.0, 'new')",
         )
-        .bind(tag_id)
+        .bind(&id)
         .bind(problem_id)
-        .bind(tag_name)
-        .bind(Utc::now())
         .execute(pool)
         .await?;
-
         Ok(())
     }
 
-    /// Bulk import from CSV
-    pub async fn bulk_import(
-        csv_content: &str,
-        pool: &SqlitePool,
-    ) -> Result<(i32, i32, Vec<String>)> {
-        let mut imported = 0;
-        let mut failed = 0;
-        let mut errors = Vec::new();
+    async fn create_study_phase(problem_id: &str, pool: &SqlitePool) -> Result<(), sqlx::Error> {
+        let id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO study_phase_progress (id, problem_id, current_phase, current_step)
+             VALUES (?, ?, 1, 1)",
+        )
+        .bind(&id)
+        .bind(problem_id)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
 
-        for (line_num, line) in csv_content.lines().enumerate().skip(1) {
-            let parts: Vec<&str> = line.split(',').collect();
+    async fn create_mastery(problem_id: &str, pool: &SqlitePool) -> Result<(), sqlx::Error> {
+        let id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO problem_mastery (id, problem_id, solved, mastery_percent)
+             VALUES (?, ?, 0, 0)",
+        )
+        .bind(&id)
+        .bind(problem_id)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+}
 
-            if parts.len() < 3 {
-                failed += 1;
-                errors.push(format!("Line {}: insufficient columns", line_num + 1));
-                continue;
-            }
+#[cfg(test)]
+mod tests {
 
-            let title = parts[0].trim();
-            let description = parts.get(1).map(|s| s.trim().to_string());
-            let difficulty = parts[2].trim().parse::<i32>().unwrap_or(3);
-
-            match Self::create(
-                CreateProblemRequest {
-                    title: title.to_string(),
-                    description,
-                    difficulty,
-                },
-                pool,
-            )
-            .await
-            {
-                Ok(_) => imported += 1,
-                Err(e) => {
-                    failed += 1;
-                    errors.push(format!("Line {}: {}", line_num + 1, e));
-                }
-            }
-        }
-
-        Ok((imported, failed, errors))
+    #[tokio::test]
+    async fn test_create_problem() {
+        // Test will be implemented in Phase 1, Task 1.13
+        // For now, just shows the structure
     }
 }

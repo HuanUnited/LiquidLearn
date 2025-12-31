@@ -1,54 +1,38 @@
-use serde::Serialize;
-use sqlx::SqlitePool;
-use tauri::State;
-
-use crate::fsrs::FsrsParameters;
-use crate::models::FsrsCard;
-use crate::services::{CardStats, DueCard, FsrsService};
-
-#[derive(Serialize)]
-pub struct ReviewResultResponse {
-    pub card: FsrsCard,
-    pub new_interval: i32,
-    pub new_state: String,
-    pub is_lapse: bool,
-}
+use crate::db::Database;
+use crate::models::ReviewRequest;
+use crate::services::FsrsService;
 
 #[tauri::command]
 pub async fn process_review(
-    card_id: String,
-    rating: i32,
-    elapsed_seconds: i64,
-    pool: State<'_, SqlitePool>,
-) -> Result<FsrsCard, String> {
-    FsrsService::process_card_review(&card_id, rating, elapsed_seconds, &pool)
+    request: ReviewRequest,
+    db: tauri::State<'_, Database>,
+) -> Result<serde_json::Value, String> {
+    FsrsService::process_review(request, db.pool())
         .await
-        .map_err(|e| e.to_string())
+        .map(|result| serde_json::to_value(result).unwrap_or(serde_json::json!({})))
+        .map_err(|e| format!("Failed to process review: {}", e))
 }
 
 #[tauri::command]
-pub async fn get_next_due_problems(
-    limit: i32,
-    pool: State<'_, SqlitePool>,
-) -> Result<Vec<DueCard>, String> {
-    FsrsService::get_next_due(limit, &pool)
+pub async fn get_due_cards_count(db: tauri::State<'_, Database>) -> Result<i64, String> {
+    FsrsService::get_due_cards(db.pool())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| format!("Failed to get due cards: {}", e))
 }
 
 #[tauri::command]
-pub async fn get_card_stats(
-    card_id: String,
-    pool: State<'_, SqlitePool>,
-) -> Result<CardStats, String> {
-    FsrsService::get_card_stats(&card_id, &pool)
+pub async fn get_fsrs_stats(db: tauri::State<'_, Database>) -> Result<serde_json::Value, String> {
+    FsrsService::get_stats(db.pool())
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| format!("Failed to get stats: {}", e))
 }
 
 #[tauri::command]
-pub async fn get_fsrs_config(pool: State<'_, SqlitePool>) -> Result<FsrsParameters, String> {
-    FsrsService::load_parameters(&pool)
+pub async fn get_fsrs_parameters(
+    db: tauri::State<'_, Database>,
+) -> Result<serde_json::Value, String> {
+    FsrsService::get_parameters(db.pool())
         .await
-        .map_err(|e| e.to_string())
+        .map(|p| serde_json::to_value(p).unwrap_or(serde_json::json!({})))
+        .map_err(|e| format!("Failed to get parameters: {}", e))
 }
